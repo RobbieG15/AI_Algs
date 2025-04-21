@@ -1,3 +1,9 @@
+import os
+import re
+import shutil
+import tempfile
+
+import imageio.v2 as imageio
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy.stats import multivariate_normal, norm
@@ -78,23 +84,37 @@ def maximization_step(data, responsibilities):
 
 
 # === EM Algorithm ===
-def em_mixture_model(d, num_iterations, data, k):
+def em_mixture_model(d, num_iterations, data, k, save_gif=False):
     assert data.shape[1] == d, "Data dimensionality mismatch"
     means, covariances, pis = initialize_parameters(data, k)
 
-    for _ in tqdm(range(num_iterations), desc="EM Iteration"):
+    temp_dir = tempfile.mkdtemp()
+
+    for iteration in tqdm(range(num_iterations), desc="EM Iteration"):
         responsibilities = expectation_step(data, means, covariances, pis)
         means, covariances, pis = maximization_step(data, responsibilities)
+
+        if save_gif:
+            save_plot(
+                data, means, covariances, responsibilities, k, temp_dir, iteration
+            )
 
     if d == 1:
         stds = np.sqrt(covariances)[:, np.newaxis]
     else:
         stds = np.array([np.sqrt(np.diag(cov)) for cov in covariances])
+
+    if save_gif:
+        create_gif(temp_dir)
+
+    # Clean up the temporary directory
+    shutil.rmtree(temp_dir)
+
     return means, stds, covariances, responsibilities
 
 
 # === Plotting (1D) ===
-def plot_1d(data, means, covariances, responsibilities, k):
+def plot_1d(data, means, covariances, responsibilities, k, show):
     cluster_ids = np.argmax(responsibilities, axis=1)
     colors = plt.get_cmap("tab10", k)
     plt.figure(figsize=(8, 4))
@@ -122,11 +142,12 @@ def plot_1d(data, means, covariances, responsibilities, k):
     plt.ylabel("Density")
     plt.legend()
     plt.grid(True)
-    plt.show()
+    if show:
+        plt.show()
 
 
 # === Plotting for 2D or PCA projection ===
-def plot_gaussian_density(data, means, covariances, cluster_ids, k):
+def plot_gaussian_density(data, means, covariances, cluster_ids, k, show):
     plt.figure(figsize=(8, 6))
     colors = plt.get_cmap("tab10", k)
 
@@ -157,17 +178,18 @@ def plot_gaussian_density(data, means, covariances, cluster_ids, k):
     plt.legend()
     plt.grid(True)
     plt.axis("equal")
-    plt.show()
+    if show:
+        plt.show()
 
 
 # === Wrapper: handles 1D, 2D, >2D ===
-def plot_gaussians_projected(data, means, covariances, responsibilities, k):
+def plot_gaussians_projected(data, means, covariances, responsibilities, k, show=True):
     d = data.shape[1]
     if d == 1:
-        plot_1d(data, means, covariances, responsibilities, k)
+        plot_1d(data, means, covariances, responsibilities, k, show)
     elif d == 2:
         cluster_ids = np.argmax(responsibilities, axis=1)
-        plot_gaussian_density(data, means, covariances, cluster_ids, k)
+        plot_gaussian_density(data, means, covariances, cluster_ids, k, show)
     else:
         pca = PCA(n_components=2)
         data_2d = pca.fit_transform(data)
@@ -176,14 +198,40 @@ def plot_gaussians_projected(data, means, covariances, responsibilities, k):
             pca.components_ @ cov @ pca.components_.T for cov in covariances
         ]
         cluster_ids = np.argmax(responsibilities, axis=1)
-        plot_gaussian_density(data_2d, means_2d, covariances_2d, cluster_ids, k)
+        plot_gaussian_density(data_2d, means_2d, covariances_2d, cluster_ids, k, show)
+
+
+# === Save Plot to Temporary Directory ===
+def save_plot(data, means, covariances, responsibilities, k, temp_dir, iteration):
+    plot_gaussians_projected(data, means, covariances, responsibilities, k, show=False)
+
+    # Save the figure to the temp directory
+    plt.savefig(os.path.join(temp_dir, f"iteration_{iteration}.png"))
+    plt.close()
+
+
+# === Create GIF from Saved Figures ===
+def create_gif(temp_dir):
+    def extract_iteration_number(filename):
+        match = re.search(r"iteration_(\d+)\.png", filename)
+        return int(match.group(1)) if match else -1
+
+    # Get all the image files in the temp directory
+    image_files = [f for f in os.listdir(temp_dir) if f.endswith(".png")]
+    sorted_files = sorted(image_files, key=extract_iteration_number)
+    images = [imageio.imread(os.path.join(temp_dir, f)) for f in sorted_files]
+
+    # Save the images as a GIF
+    gif_output_path = os.path.join("outputs", "gmm_iterations.gif")
+    imageio.mimsave(gif_output_path, images, duration=1.5)
+    print(f"GIF saved to {gif_output_path}")
 
 
 # === Example Usage ===
 if __name__ == "__main__":
     np.random.seed(69)
 
-    d = 2
+    d = 5
     k = 3
     n = 300
     num_iterations = 20
@@ -205,8 +253,9 @@ if __name__ == "__main__":
         )
 
     means, stds, covariances, responsibilities = em_mixture_model(
-        d, num_iterations, data, k
+        d, num_iterations, data, k, save_gif=True
     )
+
     print("Final Means:\n", means)
     print("Final STDs:\n", stds)
 
